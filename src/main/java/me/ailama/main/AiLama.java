@@ -36,6 +36,31 @@ public class AiLama
         return parts;
     }
 
+    /**
+     * Remove any model "thinking" content like <think>...</think> from output.
+     * This is a defensive filter to avoid leaking internal reasoning blocks.
+     */
+    public String sanitizeModelOutput(String s) {
+        if (s == null || s.isEmpty()) return s;
+        String sanitized = s;
+        String prev;
+        // Repeat until no more changes to handle nested or repeated blocks
+        do {
+            prev = sanitized;
+            // Normal <think> ... </think>
+            sanitized = sanitized.replaceAll("(?is)<\\s*think\\b[^>]*>[\\s\\S]*?<\\s*/\\s*think\\s*>", "");
+            // HTML-escaped &lt;think&gt;...&lt;/think&gt;
+            sanitized = sanitized.replaceAll("(?is)&lt;\\s*think\\b[^>]*&gt;[\\s\\S]*?&lt;\\s*/\\s*think\\s*&gt;", "");
+            // Unclosed variants: remove from opening tag to end
+            sanitized = sanitized.replaceAll("(?is)<\\s*think\\b[^>]*>[\\s\\S]*$", "");
+            sanitized = sanitized.replaceAll("(?is)&lt;\\s*think\\b[^>]*&gt;[\\s\\S]*$", "");
+            // Remove any stray open/close tags left
+            sanitized = sanitized.replaceAll("(?is)</?\\s*think[^>]*>", "");
+            sanitized = sanitized.replaceAll("(?is)&lt;/?\\s*think[^>]*&gt;", "");
+        } while (!sanitized.equals(prev));
+        return sanitized;
+    }
+
     // delay in milliseconds
     // threadDelay: true if you want to use Thread.sleep() instead of a while loop
     // logStartEnd: true if you want to log the start and end time

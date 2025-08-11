@@ -81,7 +81,10 @@ public class DocumentCommand implements AiLamaSlashCommand {
             response = "Error while reading the document: " + e.getMessage();
         }
 
-        // Send the response
+    // Sanitize any potential <think> blocks
+    response = AiLama.getInstance().sanitizeModelOutput(response);
+
+    // Send the response
         if(response.length() > 2000) {
             List<String> responses = AiLama.getInstance().getParts(response, 2000);
 

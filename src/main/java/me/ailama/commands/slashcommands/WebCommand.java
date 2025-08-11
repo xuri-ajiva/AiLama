@@ -120,8 +120,8 @@ public class WebCommand implements AiLamaSlashCommand {
             return;
         }
 
-        // Get the response
-        String response = assistant.chat(userId,instructionOption != null ? instructionOption : queryOption);
+    // Get the response
+    String response = assistant.chat(userId,instructionOption != null ? instructionOption : queryOption);
         response += "\n";
 
         // Add the source of the content
@@ -141,7 +141,10 @@ public class WebCommand implements AiLamaSlashCommand {
             source.append("\n\nSome URLs were forbidden and were not included in the source");
         }
 
-        if(!source.isEmpty() && response.length() + source.length() < 2000) {
+    // Sanitize any potential <think> blocks before appending source
+    response = AiLama.getInstance().sanitizeModelOutput(response);
+
+    if(!source.isEmpty() && response.length() + source.length() < 2000) {
             response += source;
         }
         else if(response.length() > 2000) {

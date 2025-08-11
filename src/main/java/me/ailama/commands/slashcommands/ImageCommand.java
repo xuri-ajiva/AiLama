@@ -139,7 +139,8 @@ public class ImageCommand implements AiLamaSlashCommand {
                         }
 
                         response.close();
-                        AiLama.getInstance().getParts(responseFromAi.toString(), 2000).forEach(res -> event.getHook().sendMessage(res).queue());
+                        String sanitized = AiLama.getInstance().sanitizeModelOutput(responseFromAi.toString());
+                        AiLama.getInstance().getParts(sanitized, 2000).forEach(res -> event.getHook().sendMessage(res).queue());
                     }
                     catch (Exception e) {
                         event.getHook().sendMessage("Error while processing the image: " + e.getMessage()).queue();

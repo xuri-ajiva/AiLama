@@ -1,12 +1,15 @@
 package me.ailama.commands.slashcommands;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
 import me.ailama.handler.commandhandler.OllamaManager;
 import me.ailama.handler.commandhandler.SearXNGManager;
 import me.ailama.handler.interfaces.AiLamaSlashCommand;
 import me.ailama.handler.interfaces.Assistant;
 import me.ailama.handler.models.Tool;
 import me.ailama.main.AiLama;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.EmbedBuilder;
 import me.ailama.main.Main;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.interactions.IntegrationType;
@@ -17,6 +20,11 @@ import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.interactions.commands.build.SlashCommandData;
 
 import java.util.*;
+import okhttp3.*;
+import okio.BufferedSource;
+import me.ailama.config.Config;
+import org.jetbrains.annotations.NotNull;
+import java.io.IOException;
 import java.util.regex.Pattern;
 
 public class AiCommand implements AiLamaSlashCommand {
@@ -46,8 +54,9 @@ public class AiCommand implements AiLamaSlashCommand {
 
         int limitCount = 3;
 
-        // Defer the reply to avoid timeout and set ephemeral if the option is provided
-        if(event.getOption("ephemeral") != null && event.getOption("ephemeral").getAsBoolean()) {
+    boolean ephemeral = event.getOption("ephemeral") != null && event.getOption("ephemeral").getAsBoolean();
+    // Defer the reply to avoid timeout and set ephemeral if the option is provided
+    if(ephemeral) {
             event.deferReply(true).queue();
         }
         else {
@@ -60,7 +69,7 @@ public class AiCommand implements AiLamaSlashCommand {
         String urlOption = event.getOption("url") != null ? event.getOption("url").getAsString() : null;
         boolean resetSession = event.getOption("reset-session") != null && event.getOption("reset-session").getAsBoolean();
 
-        String response = "";
+    String response = "";
         String sourceString = "";
         String urlForContent = null;
 
@@ -104,7 +113,7 @@ public class AiCommand implements AiLamaSlashCommand {
 
         boolean isTooledQuery = queryOption.startsWith(".");
 
-        if(urlOption != null || urlForContent != null) {
+    if(urlOption != null || urlForContent != null) {
 
             // if the url option is provided or the web option is provided, ask the assistant to answer the query based on the url
             Assistant assistant = OllamaManager.getInstance().urlAssistant( List.of(urlForContent != null ? urlForContent : urlOption) , modelOption, userId, isTooledQuery);
@@ -121,9 +130,103 @@ public class AiCommand implements AiLamaSlashCommand {
             }
             else
             {
-                response = OllamaManager.getInstance().
-                        createAssistant(modelOption, userId)
-                        .chat(userId,queryOption);
+                // Stream response for normal chat (no tools, no RAG)
+                try {
+                    String modelToUse = modelOption != null ? modelOption : OllamaManager.getInstance().getCurrentModel();
+
+                    // Build payload for Ollama /api/chat
+                    me.ailama.handler.JsonBuilder.JsonObject payload = new me.ailama.handler.JsonBuilder.JsonObject()
+                            .add("model", modelToUse)
+                            .add("messages", new me.ailama.handler.JsonBuilder.JsonArray().objects(
+                                    new me.ailama.handler.JsonBuilder.JsonObject()
+                                            .add("role", "user")
+                                            .add("content", queryOption)
+                            ));
+
+                    String url = Config.get("OLLAMA_URL") + ":" + Config.get("OLLAMA_PORT") + "/api/chat";
+                    RequestBody body = RequestBody.create(payload.build(), MediaType.get("application/json"));
+                    OkHttpClient client = new OkHttpClient();
+                    Request request = new Request.Builder().url(url).post(body).build();
+
+                    final StringBuilder aggregate = new StringBuilder();
+                    event.getHook().sendMessageEmbeds(new EmbedBuilder().setDescription("Thinking… ⚪").build()).setEphemeral(ephemeral).queue(interim -> {
+                        final int[] chunksSent = {0};
+                        final long[] lastEdit = {System.currentTimeMillis()};
+                        final long editDelayMs = 1000; // 1s throttle like Python example
+                        client.newCall(request).enqueue(new Callback() {
+                            @Override
+                            public void onResponse(@NotNull Call call, @NotNull Response resp) {
+                                if (!resp.isSuccessful()) {
+                                    interim.editMessage("Error: " + resp.code()).queue();
+                                    resp.close();
+                                    return;
+                                }
+                                try (BufferedSource source = resp.body().source()) {
+                                    while (!source.exhausted()) {
+                                        String line = source.readUtf8Line();
+                                        if (line == null || line.isEmpty()) continue;
+                                        try {
+                                            String delta = new Gson().fromJson(line, com.google.gson.JsonObject.class)
+                                                    .get("message").getAsJsonObject()
+                                                    .get("content").getAsString();
+                                            if (delta != null && !delta.isEmpty()) {
+                                                aggregate.append(delta);
+                                                String sanitized = AiLama.getInstance().sanitizeModelOutput(aggregate.toString());
+                                                List<String> parts = AiLama.getInstance().getParts(sanitized, 1900);
+                                                // Send newly completed chunks once
+                                                for (int i = chunksSent[0]; i < Math.max(0, parts.size() - 1); i++) {
+                                                    event.getHook().sendMessage(parts.get(i)).setEphemeral(ephemeral).queue();
+                                                }
+                                                // Edit interim embed with the latest chunk and a streaming indicator, but throttle updates
+                                                long now = System.currentTimeMillis();
+                                                if (!parts.isEmpty() && now - lastEdit[0] >= editDelayMs) {
+                                                    String tail = parts.get(parts.size() - 1) + " ⚪";
+                                                    EmbedBuilder eb = new EmbedBuilder().setDescription(tail);
+                                                    interim.editMessageEmbeds(eb.build()).queue();
+                                                    lastEdit[0] = now;
+                                                }
+                                                chunksSent[0] = Math.max(chunksSent[0], parts.size() - 1);
+                                            }
+                                        } catch (Exception ignore) {
+                                            // ignore malformed interim lines
+                                        }
+                                    }
+                                    // Finalize: clean indicator and flush any remaining parts
+                                    String finalSanitized = AiLama.getInstance().sanitizeModelOutput(aggregate.toString());
+                                    List<String> finalParts = AiLama.getInstance().getParts(finalSanitized, 1900);
+                                    for (int i = chunksSent[0]; i < Math.max(0, finalParts.size() - 1); i++) {
+                                        event.getHook().sendMessage(finalParts.get(i)).setEphemeral(ephemeral).queue();
+                                    }
+                                    if (!finalParts.isEmpty()) {
+                                        EmbedBuilder eb = new EmbedBuilder().setDescription(finalParts.get(finalParts.size() - 1));
+                                        interim.editMessageEmbeds(eb.build()).queue();
+                                    } else {
+                                        EmbedBuilder eb = new EmbedBuilder().setDescription("(no content)");
+                                        interim.editMessageEmbeds(eb.build()).queue();
+                                    }
+                                    resp.close();
+                                } catch (Exception e) {
+                                    EmbedBuilder eb = new EmbedBuilder().setDescription("Error while streaming: " + e.getMessage());
+                                    interim.editMessageEmbeds(eb.build()).queue();
+                                }
+                            }
+
+                            @Override
+                            public void onFailure(@NotNull Call call, @NotNull IOException e) {
+                                EmbedBuilder eb = new EmbedBuilder().setDescription("Error: " + e.getMessage());
+                                interim.editMessageEmbeds(eb.build()).queue();
+                            }
+                        });
+                    });
+
+                    // Return early since streaming handles sending
+                    return;
+                } catch (Exception e) {
+                    // Fallback to non-streaming
+                    response = OllamaManager.getInstance().
+                            createAssistant(modelOption, userId)
+                            .chat(userId,queryOption);
+                }
             }
 
 
@@ -138,7 +241,7 @@ public class AiCommand implements AiLamaSlashCommand {
             sourceString += "\n\nSource: <" + (urlForContent != null ? urlForContent : urlOption) + ">";
         }
 
-        if(isTooledQuery) {
+    if(isTooledQuery) {
             ObjectMapper mapper = new ObjectMapper();
 
             String temp = Pattern.compile("(?<=\":\").*(?=\")").matcher(response).replaceAll(x -> x.group().replace("\"", "_QUOTE_") );
@@ -177,11 +280,14 @@ public class AiCommand implements AiLamaSlashCommand {
 
         String nullResponse = "I'm sorry, I don't understand what you're saying. did you provide the correct options?";
 
-        if(response == null || response.isEmpty()) {
+    if(response == null || response.isEmpty()) {
             response = nullResponse;
         }
 
-        if(!response.equals(nullResponse) && !sourceString.isEmpty() && response.length() + sourceString.length() < 2000) {
+    // Sanitize any potential <think> blocks before sending
+    response = AiLama.getInstance().sanitizeModelOutput(response);
+
+    if(!response.equals(nullResponse) && !sourceString.isEmpty() && response.length() + sourceString.length() < 2000) {
             response += sourceString;
         }
         else if(response.length() > 2000) {
@@ -203,7 +309,7 @@ public class AiCommand implements AiLamaSlashCommand {
     }
 
     public void sendMessage(SlashCommandInteractionEvent event, String response) {
-        if(event.getOption("ephemeral") != null && event.getOption("ephemeral").getAsBoolean()) {
+    if(event.getOption("ephemeral") != null && event.getOption("ephemeral").getAsBoolean()) {
             event.getHook().sendMessage(response).setEphemeral(true).queue();
         }
         else

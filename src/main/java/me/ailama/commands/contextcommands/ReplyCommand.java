@@ -115,9 +115,9 @@ public class ReplyCommand implements AiLamaMessageContextCommand, AiLamaEvent {
                 .systemMessageProvider(o -> finalCustomSystemMessage != null ? String.format(finalCustomSystemMessage, getDateTime(), tone, message) : String.format(SystemMessage, getDateTime(), tone, message))
                 .build();
 
-        String resp = assistant.answer(message);
+    String resp = AiLama.getInstance().sanitizeModelOutput(assistant.answer(message));
 
-        AiLama.getInstance().getParts(resp, 2000).forEach(p -> event.getHook().sendMessage(p).queue());
+    AiLama.getInstance().getParts(resp, 2000).forEach(p -> event.getHook().sendMessage(p).queue());
 
     }
 

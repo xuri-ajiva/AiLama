@@ -72,9 +72,9 @@ public class AiContextCommand implements AiLamaMessageContextCommand, AiLamaEven
                 .systemMessageProvider(o -> SystemMessage.formatted(message))
                 .build();
 
-        String resp = assistant.answer(message);
+    String resp = AiLama.getInstance().sanitizeModelOutput(assistant.answer(message));
 
-        AiLama.getInstance().getParts(resp, 2000).forEach(p -> event.getHook().sendMessage(p).queue());
+    AiLama.getInstance().getParts(resp, 2000).forEach(p -> event.getHook().sendMessage(p).queue());
 
     }
 }
