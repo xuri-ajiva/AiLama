@@ -1,7 +1,9 @@
 package me.ailama.autoevents.jdaevents;
 
 import me.ailama.handler.commandhandler.CommandRegister;
+import me.ailama.config.Config;
 import me.ailama.main.Main;
+import net.dv8tion.jda.api.JDAInfo;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import org.slf4j.Logger;
@@ -15,7 +17,8 @@ public class JDAReady extends ListenerAdapter {
         Logger LOGGER = Main.LOGGER;
 
         System.out.println();
-        LOGGER.info("Bot Name : " + event.getJDA().getSelfUser().getAsTag());
+    LOGGER.info("JDA Version : " + JDAInfo.VERSION);
+    LOGGER.info("Bot Name : " + event.getJDA().getSelfUser().getAsTag());
         LOGGER.info("Bot ID : " + event.getJDA().getSelfUser().getId());
         LOGGER.info("Start Time : " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy hh:mm:ss a")));
         System.out.println();

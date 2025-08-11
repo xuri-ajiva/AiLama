@@ -44,7 +44,6 @@ public class Main {
                         GatewayIntent.GUILD_MESSAGE_REACTIONS,
                         GatewayIntent.SCHEDULED_EVENTS,
                         GatewayIntent.MESSAGE_CONTENT,
-                        GatewayIntent.GUILD_EXPRESSIONS,
                         GatewayIntent.GUILD_EMOJIS_AND_STICKERS
                 )
 
